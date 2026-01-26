@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SearchResults: View {
     @ObservedObject var store: TaskStore
-    @Binding var searchText: String   // ← принимает $searchText из ContentView
+    @Binding var searchText: String
 
     var filteredTasks: [TaskItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -16,13 +16,23 @@ struct SearchResults: View {
     var body: some View {
         NavigationStack {
             if filteredTasks.isEmpty {
-                ContentUnavailableView("Ничего не найдено",
-                                        systemImage: "magnifyingglass")
+                ContentUnavailableView(
+                    searchText.isEmpty ? "Начните поиск" : "Ничего не найдено",
+                    systemImage: "magnifyingglass",
+                    description: searchText.isEmpty ? Text("Введите запрос для поиска") : Text("Попробуйте другой запрос")
+                )
             } else {
-                List(filteredTasks) { task in
-                    Label(task.text, systemImage: task.isDone ? "checkmark.circle.fill" : "circle")
+                List {
+                    ForEach(filteredTasks) { task in
+                        TaskBubbleView(task: task, store: store)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
                 }
-                .listStyle(.insetGrouped)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Color.white)
             }
         }
         .navigationTitle("Поиск")
