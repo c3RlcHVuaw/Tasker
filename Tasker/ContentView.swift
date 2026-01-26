@@ -1,90 +1,87 @@
 import SwiftUI
 import Combine
 
-enum Tabs: Hashable {
-    case home, archive, search
+enum AppTab: Hashable {
+    case home, search, archive
 }
 
 struct ContentView: View {
     @StateObject private var store = TaskStore()
-    @State private var searchText = ""
-    @State private var selectedTab: Tabs = .home
+    @State private var selectedTab: AppTab = .home
+
+    @State private var selectedPhotoForPreview: Data?
+    @State private var isPhotoPreviewPresented = false
+    @State private var selectedPhotoItem: PhotoItem?
+    @State private var searchText: String = ""
 
     var body: some View {
-        if #available(iOS 18.0, *) {
-            // ✅ Новый API Tab для iOS 18
-            TabView(selection: $selectedTab) {
-                Tab(value: Tabs.home) {
-                    HomeView(store: store)
-                } label: {
-                    Label("Главная", systemImage: "house.fill")
-                }
-
-                Tab(value: Tabs.archive) {
-                    ArchiveView(store: store)
-                } label: {
-                    Label("Архив", systemImage: "archivebox.fill")
-                }
-
-                // ✅ Нативный поисковый таб справа
-                Tab(value: Tabs.search, role: .search) {
-                    SearchResults(store: store, searchText: $searchText)
-                }
+        TabView(selection: $selectedTab) {
+            // Главная
+            SwiftUI.Tab("Главная", systemImage: "house", value: AppTab.home) {
+                HomeView(
+                    store: store,
+                    selectedPhotoForPreview: $selectedPhotoForPreview,
+                    isPhotoPreviewPresented: $isPhotoPreviewPresented
+                )
             }
-            .tint(.blue)
-            .modifier(KeyboardResponsive())
-        } else {
-            // 🔙 Fallback для iOS 17 и ниже
-            TabView(selection: $selectedTab) {
-                HomeView(store: store)
-                    .tabItem { Label("Главная", systemImage: "house.fill") }
-                    .tag(Tabs.home)
 
-                ArchiveView(store: store)
-                    .tabItem { Label("Архив", systemImage: "archivebox.fill") }
-                    .tag(Tabs.archive)
-
-                SearchResults(store: store, searchText: $searchText)
-                    .tabItem { Label("Поиск", systemImage: "magnifyingglass") }
-                    .tag(Tabs.search)
+            // Поиск
+            SwiftUI.Tab("Поиск", systemImage: "magnifyingglass",
+                        value: AppTab.search, role: .search) {
+                SearchView(
+                    store: store,
+                    selectedPhotoForPreview: $selectedPhotoForPreview,
+                    isPhotoPreviewPresented: $isPhotoPreviewPresented,
+                    searchText: $searchText
+                )
+                .searchable(text: $searchText, prompt: "Введите запрос")
             }
-            .tint(.blue)
+
+            // Архив
+            SwiftUI.Tab("Архив", systemImage: "archivebox", value: AppTab.archive) {
+                ArchiveView(
+                    store: store,
+                    selectedPhotoForPreview: $selectedPhotoForPreview,
+                    isPhotoPreviewPresented: $isPhotoPreviewPresented
+                )
+            }
+        }
+        .toolbarBackground(.hidden, for: .tabBar)
+        .scrollContentBackground(.hidden)
+        .onAppear {
+            let appearance = UITabBarAppearance()
+            appearance.configureWithTransparentBackground()
+            appearance.backgroundEffect = nil
+            appearance.backgroundColor = .clear
+            UITabBar.appearance().standardAppearance = appearance
+            if #available(iOS 15.0, *) {
+                UITabBar.appearance().scrollEdgeAppearance = appearance
+            }
+            UITabBar.appearance().isTranslucent = true
+            UITabBar.appearance().backgroundColor = .clear
+            UITabBar.appearance().backgroundImage = UIImage()
+            UITabBar.appearance().shadowImage = UIImage()
+        }
+        .onChange(of: selectedPhotoForPreview) { newValue in
+            if let data = newValue {
+                selectedPhotoItem = PhotoItem(data: data)
+            }
+        }
+        .sheet(item: $selectedPhotoItem) { item in
+            QuickLookPreview(data: item.data) {
+                selectedPhotoItem = nil
+                selectedPhotoForPreview = nil
+            }
         }
     }
 }
 
-
-// ✅ Модификатор, который сдвигает контент при появлении клавиатуры
-struct KeyboardResponsive: ViewModifier {
-    @State private var keyboardHeight: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.bottom, keyboardHeight)
-            .animation(.easeOut(duration: 0.25), value: keyboardHeight)
-            .onReceive(Publishers.keyboardHeightPublisher) { height in
-                keyboardHeight = height
-            }
-    }
+fileprivate struct PhotoItem: Identifiable {
+    let id = UUID()
+    let data: Data
 }
 
-//// ✅ Паблишер, отслеживающий высоту клавиатуры
-extension Publishers {
-    static var keyboardHeight: AnyPublisher<CGFloat, Never> {
-        let willShow = NotificationCenter.default
-            .publisher(for: UIResponder.keyboardWillShowNotification)
-            .compactMap { notification in
-                (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)?.height
-            }
 
-        let willHide = NotificationCenter.default
-            .publisher(for: UIResponder.keyboardWillHideNotification)
-            .map { _ in CGFloat(0) }
-
-        return Publishers.Merge(willShow, willHide)
-            .eraseToAnyPublisher()
-    }
-}
 
 #Preview {
     ContentView()

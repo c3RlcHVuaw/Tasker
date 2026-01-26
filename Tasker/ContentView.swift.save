@@ -1,0 +1,50 @@
+ echo "        .onAppear {\n            UITabBar.appearance().isTranslucent = true\n            UITabBar.appearance().backgroundColor = .clear\n        }\n        .ignoresSafeArea(.keyboard, edges: .bottom)" >> /Users/air/Documents/Swift/Tasker/Tasker/ContentView.swift
+ cat /Users/air/Documents/Swift/Tasker/Tasker/ContentView.swift
+import SwiftUI
+import Combine
+
+enum AppTab: Hashable {
+    case home, search, archive
+}
+
+struct ContentView: View {
+    @StateObject private var store = TaskStore()
+    @State private var selectedTab: AppTab = .home
+
+    @State private var selectedPhotoForPreview: Data?
+    @State private var isPhotoPreviewPresented = false
+    @State private var searchText: String = ""
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            // Главная
+            SwiftUI.Tab("Главная", systemImage: "house", value: AppTab.home) {
+                HomeView(store: store,
+                         selectedPhotoForPreview: $selectedPhotoForPreview,
+                         isPhotoPreviewPresented: $isPhotoPreviewPresented)
+            }
+
+            // Поиск
+            SwiftUI.Tab("Поиск", systemImage: "magnifyingglass",
+                        value: AppTab.search, role: .search) {
+                SearchView(store: store,
+                           selectedPhotoForPreview: $selectedPhotoForPreview,
+                           isPhotoPreviewPresented: $isPhotoPreviewPresented)
+                    .searchable(text: $searchText, prompt: "Введите запрос")
+            }
+
+            // Архив
+            SwiftUI.Tab("Архив", systemImage: "archivebox", value: AppTab.archive) {
+                ArchiveView(store: store,
+                            selectedPhotoForPreview: $selectedPhotoForPreview,
+                            isPhotoPreviewPresented: $isPhotoPreviewPresented)
+            }
+        }
+        .toolbarBackground(.hidden, for: .tabBar)
+        .scrollContentBackground(.hidden)
+    }
+}
+
+#Preview {
+    ContentView()
+}
