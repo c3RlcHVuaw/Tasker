@@ -32,7 +32,6 @@ struct ContentView: View {
                 }
             }
             .tint(.blue)
-            .modifier(KeyboardResponsive())
         } else {
             // 🔙 Fallback для iOS 17 и ниже
             TabView(selection: $selectedTab) {

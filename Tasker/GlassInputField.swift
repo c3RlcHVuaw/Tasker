@@ -18,11 +18,19 @@ struct GlassInputField: View {
                 .textFieldStyle(.plain)
                 .submitLabel(.done)
                 .onSubmit(onSubmit)
-                .glassEffect(.regular.tint(.clear).interactive(), in: .rect(cornerRadius: 22))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22)
-                        .strokeBorder(.white.opacity(0.2))
-                )
+                .background {
+                    if #available(iOS 26.0, *) {
+                        RoundedRectangle(cornerRadius: 22)
+                            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22))
+                    } else {
+                        RoundedRectangle(cornerRadius: 22)
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 22)
+                                    .strokeBorder(.white.opacity(0.2))
+                            )
+                    }
+                }
 
             // MARK: - Кнопка отправки
             if isFocused || !text.isEmpty {
@@ -32,14 +40,18 @@ struct GlassInputField: View {
                     }
                 }) {
                     ZStack {
-                        if #available(iOS 18.0, *) {
+                        if #available(iOS 26.0, *) {
                             Circle()
-                                .glassEffect(
-                                    .regular
-                                        .tint(text.isEmpty ? .clear : .blue)
-                                        .interactive(),
-                                    in: .circle
-                                )
+                                .fill(.clear)
+                                .overlay {
+                                    Circle()
+                                        .glassEffect(
+                                            .regular
+                                                .tint(text.isEmpty ? .clear : .blue)
+                                                .interactive(),
+                                            in: .circle
+                                        )
+                                }
                         } else {
                             Circle()
                                 .fill(text.isEmpty ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.blue))
@@ -69,8 +81,7 @@ struct GlassInputField: View {
             }
         }
         .padding(.horizontal)
-        .padding(.bottom, 16)
-        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .padding(.bottom, 8)
     }
 }
 

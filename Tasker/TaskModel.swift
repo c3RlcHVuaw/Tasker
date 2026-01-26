@@ -1,8 +1,7 @@
 import Foundation
-import Combine
 
 // MARK: - Модель задачи
-struct TaskItem: Identifiable, Equatable {
+struct TaskItem: Identifiable, Equatable, Codable {
     let id: UUID
     var text: String
     var date: Date
@@ -14,11 +13,4 @@ struct TaskItem: Identifiable, Equatable {
         self.date = date
         self.isDone = isDone
     }
-}
-
-// MARK: - Хранилище задач
-@MainActor
-final class TaskStore: ObservableObject {
-    @Published var tasks: [TaskItem] = []
-    @Published var archivedTasks: [TaskItem] = []
 }
