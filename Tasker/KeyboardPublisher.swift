@@ -14,6 +14,7 @@ extension Publishers {
             .map { _ in CGFloat(0) }
 
         return Publishers.Merge(willShow, willHide)
+            .removeDuplicates()
             .eraseToAnyPublisher()
     }
 }

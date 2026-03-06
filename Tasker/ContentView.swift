@@ -1,88 +1,142 @@
 import SwiftUI
-import Combine
 
-enum Tabs: Hashable {
+enum AppTab: Hashable {
     case home, archive, search
 }
 
 struct ContentView: View {
     @StateObject private var store = TaskStore()
-    @State private var searchText = ""
-    @State private var selectedTab: Tabs = .home
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedTab: AppTab = .home
+
+    @State private var selectedPhotoForPreview: Data?
+    @State private var isPhotoPreviewPresented = false
+    @State private var selectedPhotoItem: PhotoItem?
+    @State private var didPrepareTabBarAppearance = false
 
     var body: some View {
-        if #available(iOS 18.0, *) {
-            // ✅ Новый API Tab для iOS 18
-            TabView(selection: $selectedTab) {
-                Tab(value: Tabs.home) {
-                    HomeView(store: store)
-                } label: {
-                    Label("Главная", systemImage: "house.fill")
-                }
-
-                Tab(value: Tabs.archive) {
-                    ArchiveView(store: store)
-                } label: {
-                    Label("Архив", systemImage: "archivebox.fill")
-                }
-
-                // ✅ Нативный поисковый таб справа
-                Tab(value: Tabs.search, role: .search) {
-                    SearchResults(store: store, searchText: $searchText)
+        content
+            .tabViewStyle(.automatic)
+            .toolbarBackground(.visible, for: .tabBar)
+            .toolbarBackground(Color.clear, for: .tabBar)
+            .scrollContentBackground(.hidden)
+            .onAppear {
+                guard !didPrepareTabBarAppearance else { return }
+                didPrepareTabBarAppearance = true
+                prepareTabBarAppearance()
+            }
+            .onChange(of: selectedPhotoForPreview) { _, newValue in
+                handlePhotoSelection(newValue)
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .inactive || newPhase == .background {
+                    store.flushPendingSaves()
                 }
             }
-            .tint(.blue)
+            .sheet(item: $selectedPhotoItem, onDismiss: {
+                selectedPhotoForPreview = nil
+            }, content: photoPreviewSheet)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if #available(iOS 26.0, *) {
+            tabsIOS26
         } else {
-            // 🔙 Fallback для iOS 17 и ниже
-            TabView(selection: $selectedTab) {
-                HomeView(store: store)
-                    .tabItem { Label("Главная", systemImage: "house.fill") }
-                    .tag(Tabs.home)
+            tabsFallback
+        }
+    }
 
-                ArchiveView(store: store)
-                    .tabItem { Label("Архив", systemImage: "archivebox.fill") }
-                    .tag(Tabs.archive)
+    // MARK: - Tabs
 
-                SearchResults(store: store, searchText: $searchText)
-                    .tabItem { Label("Поиск", systemImage: "magnifyingglass") }
-                    .tag(Tabs.search)
+    private var tabsIOS26: some View {
+        TabView {
+            Tab("Главная", systemImage: "house") {
+                homeTab
             }
-            .tint(.blue)
+
+            Tab("Архив", systemImage: "archivebox") {
+                archiveTab
+            }
+
+            Tab(role: .search) {
+                searchTab
+            }
+        }
+    }
+
+    private var tabsFallback: some View {
+        TabView(selection: $selectedTab) {
+            homeTab
+                .tabItem { Label("Главная", systemImage: "house") }
+                .tag(AppTab.home)
+
+            archiveTab
+                .tabItem { Label("Архив", systemImage: "archivebox") }
+                .tag(AppTab.archive)
+
+            searchTab
+                .tabItem { Label("Поиск", systemImage: "magnifyingglass") }
+                .tag(AppTab.search)
+        }
+        .animation(.snappy(duration: 0.26, extraBounce: 0.03), value: selectedTab)
+    }
+
+    // MARK: - Tab contents
+
+    private var homeTab: some View {
+        HomeView(
+            store: store,
+            selectedPhotoForPreview: $selectedPhotoForPreview,
+            isPhotoPreviewPresented: $isPhotoPreviewPresented
+        )
+    }
+
+    private var archiveTab: some View {
+        ArchiveView(
+            store: store,
+            selectedPhotoForPreview: $selectedPhotoForPreview,
+            isPhotoPreviewPresented: $isPhotoPreviewPresented
+        )
+    }
+
+    private var searchTab: some View {
+        SearchScreen(store: store)
+    }
+
+    // MARK: - Appearance & Sheets
+
+    private func prepareTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithTransparentBackground()
+        appearance.backgroundColor = .clear
+        appearance.backgroundEffect = nil
+        appearance.shadowColor = .clear
+
+        UITabBar.appearance().standardAppearance = appearance
+        if #available(iOS 15.0, *) {
+            UITabBar.appearance().scrollEdgeAppearance = appearance
+        }
+        UITabBar.appearance().isTranslucent = true
+    }
+
+    private func handlePhotoSelection(_ newValue: Data?) {
+        if let data = newValue {
+            selectedPhotoItem = PhotoItem(data: data)
+        }
+    }
+
+    private func photoPreviewSheet(item: PhotoItem) -> some View {
+        QuickLookPreview(data: item.data) {
+            selectedPhotoItem = nil
+            selectedPhotoForPreview = nil
         }
     }
 }
 
-
-// ✅ Модификатор, который сдвигает контент при появлении клавиатуры
-struct KeyboardResponsive: ViewModifier {
-    @State private var keyboardHeight: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.bottom, keyboardHeight)
-            .animation(.easeOut(duration: 0.25), value: keyboardHeight)
-            .onReceive(Publishers.keyboardHeightPublisher) { height in
-                keyboardHeight = height
-            }
-    }
-}
-
-//// ✅ Паблишер, отслеживающий высоту клавиатуры
-extension Publishers {
-    static var keyboardHeight: AnyPublisher<CGFloat, Never> {
-        let willShow = NotificationCenter.default
-            .publisher(for: UIResponder.keyboardWillShowNotification)
-            .compactMap { notification in
-                (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)?.height
-            }
-
-        let willHide = NotificationCenter.default
-            .publisher(for: UIResponder.keyboardWillHideNotification)
-            .map { _ in CGFloat(0) }
-
-        return Publishers.Merge(willShow, willHide)
-            .eraseToAnyPublisher()
-    }
+fileprivate struct PhotoItem: Identifiable {
+    let id = UUID()
+    let data: Data
 }
 
 #Preview {
