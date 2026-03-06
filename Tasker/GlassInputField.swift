@@ -2,12 +2,18 @@ import SwiftUI
 import PhotosUI
 
 struct GlassInputField: View {
-    @Binding var text: String
-    @Binding var photos: [Data]
+    struct DraftPhoto: Identifiable, Equatable {
+        let id = UUID()
+        let data: Data
+    }
+
     var placeholder: String = "Создать задачу"
-    var onSubmit: (() -> Void)?
+    var onSubmit: ((String, [Data], TaskRecurrence) -> Void)?
     @State private var isFocused = false
 
+    @State private var text = ""
+    @State private var photos: [DraftPhoto] = []
+    @State private var recurrence: TaskRecurrence = .none
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var dragOffset: CGFloat = 0
     @State private var photoLoadingTask: Task<Void, Never>?
@@ -17,19 +23,11 @@ struct GlassInputField: View {
     }
     
     private var controlsAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .bouncy(duration: 0.32, extraBounce: 0.08)
-        } else {
-            return .spring(response: 0.34, dampingFraction: 0.84)
-        }
+        AppAnimations.standard
     }
 
     private var contentAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .smooth(duration: 0.22)
-        } else {
-            return .easeInOut(duration: 0.22)
-        }
+        AppAnimations.fade
     }
 
     var body: some View {
@@ -46,11 +44,15 @@ struct GlassInputField: View {
                     photos: $photos,
                     placeholder: placeholder,
                     isFocused: $isFocused,
-                    onSubmit: onSubmit
+                    onSubmit: submitDraft
                 )
 
                 if showsSendButton {
-                    SendButton(onSubmit: onSubmit, isDisabled: text.isEmpty && photos.isEmpty)
+                    SendButton(
+                        recurrence: $recurrence,
+                        onSubmit: submitDraft,
+                        isDisabled: text.isEmpty && photos.isEmpty
+                    )
                         .transition(.move(edge: .trailing).combined(with: .scale(scale: 0.9)).combined(with: .opacity))
                 }
             }
@@ -58,20 +60,19 @@ struct GlassInputField: View {
             .padding(.top, 8)
             .padding(.bottom, 12)
             .animation(controlsAnimation, value: isFocused)
-            .animation(controlsAnimation, value: showsSendButton)
         }
         .offset(y: dragOffset * 0.5)
         .background(Color.clear)
         .ignoresSafeArea(.keyboard)
-        .gesture(
+        .simultaneousGesture(
             DragGesture()
                 .onChanged { value in
-                    if value.translation.height > 0 {
+                    if isFocused, value.translation.height > 0 {
                         dragOffset = value.translation.height
                     }
                 }
                 .onEnded { value in
-                    if value.translation.height > 60 {
+                    if isFocused, value.translation.height > 60 {
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     }
                     withAnimation(controlsAnimation) {
@@ -85,23 +86,37 @@ struct GlassInputField: View {
         .onChange(of: selectedPhotos) { _, newItems in
             photoLoadingTask?.cancel()
             photoLoadingTask = Task {
+                let availableSlots = max(0, 10 - photos.count)
+                guard availableSlots > 0 else { return }
+                var loaded: [DraftPhoto] = []
+                loaded.reserveCapacity(min(newItems.count, availableSlots))
+
                 for item in newItems {
                     if Task.isCancelled { break }
+                    if loaded.count >= availableSlots { break }
                     if let data = try? await item.loadTransferable(type: Data.self) {
-                        if photos.count < 10 {
-                            await MainActor.run {
-                                withAnimation(contentAnimation) {
-                                    photos.insert(data, at: 0)
-                                }
-                            }
-                        }
+                        loaded.append(DraftPhoto(data: data))
                     }
                 }
                 await MainActor.run {
+                    if !loaded.isEmpty {
+                        withAnimation(contentAnimation) {
+                            photos.insert(contentsOf: loaded.reversed(), at: 0)
+                        }
+                    }
                     selectedPhotos.removeAll()
                 }
             }
         }
+    }
+
+    private func submitDraft() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !photos.isEmpty else { return }
+        onSubmit?(text, photos.map(\.data), recurrence)
+        text = ""
+        photos.removeAll(keepingCapacity: true)
+        recurrence = .none
     }
 }
 
@@ -141,18 +156,14 @@ struct PhotoPickerButton: View {
 // MARK: - Input Field Content
 struct InputFieldContent: View {
     @Binding var text: String
-    @Binding var photos: [Data]
+    @Binding var photos: [GlassInputField.DraftPhoto]
     let placeholder: String
     @FocusState private var focusState: Bool
     @Binding var isFocused: Bool
     var onSubmit: (() -> Void)?
     
     private var contentAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .smooth(duration: 0.22)
-        } else {
-            return .easeInOut(duration: 0.22)
-        }
+        AppAnimations.fade
     }
 
     var body: some View {
@@ -161,9 +172,9 @@ struct InputFieldContent: View {
             if !photos.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(photos.enumerated()), id: \.offset) { index, photoData in
+                        ForEach(photos) { photo in
                             CachedDataImage(
-                                data: photoData,
+                                data: photo.data,
                                 maxPixelSize: 48,
                                 content: { image in
                                     image
@@ -173,9 +184,8 @@ struct InputFieldContent: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 8))
                                         .overlay(alignment: .topTrailing) {
                                             Button(action: {
-                                                guard photos.indices.contains(index) else { return }
                                                 withAnimation(contentAnimation) {
-                                                    photos.remove(at: index)
+                                                    photos.removeAll(where: { $0.id == photo.id })
                                                 }
                                             }) {
                                                 Image(systemName: "xmark.circle.fill")
@@ -195,7 +205,9 @@ struct InputFieldContent: View {
                             .transition(.scale(scale: 0.92).combined(with: .opacity))
                         }
                     }
+                    .frame(height: 52, alignment: .leading)
                 }
+                .frame(height: 52)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
@@ -208,7 +220,7 @@ struct InputFieldContent: View {
                 .onSubmit {
                     onSubmit?()
                 }
-                .onChange(of: focusState) { newValue in
+                .onChange(of: focusState) { _, newValue in
                     withAnimation(contentAnimation) {
                         isFocused = newValue
                     }
@@ -216,7 +228,6 @@ struct InputFieldContent: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .animation(contentAnimation, value: photos.count)
         .background {
             if #available(iOS 26.0, *) {
                 RoundedRectangle(cornerRadius: 24)
@@ -236,15 +247,12 @@ struct InputFieldContent: View {
 
 // MARK: - Send Button
 struct SendButton: View {
+    @Binding var recurrence: TaskRecurrence
     var onSubmit: (() -> Void)?
     let isDisabled: Bool
     
     private var tapAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .snappy(duration: 0.22, extraBounce: 0.06)
-        } else {
-            return .spring(response: 0.35, dampingFraction: 0.6)
-        }
+        AppAnimations.quick
     }
 
     var body: some View {
@@ -279,6 +287,20 @@ struct SendButton: View {
             }
             .frame(width: 44, height: 44)
         }
+        .contextMenu {
+            ForEach(TaskRecurrence.allCases, id: \.rawValue) { item in
+                Button {
+                    recurrence = item
+                } label: {
+                    HStack {
+                        Text(item.title)
+                        if recurrence == item {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        }
         .buttonStyle(PressableButtonStyle())
     }
 }
@@ -286,11 +308,7 @@ struct SendButton: View {
 // MARK: - Pressable Button Style
 struct PressableButtonStyle: ButtonStyle {
     private var pressAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .bouncy(duration: 0.22, extraBounce: 0.08)
-        } else {
-            return .spring(response: 0.35, dampingFraction: 0.6)
-        }
+        AppAnimations.press
     }
 
     func makeBody(configuration: Configuration) -> some View {

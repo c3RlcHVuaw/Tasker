@@ -6,11 +6,7 @@ struct ArchiveView: View {
     @Binding var isPhotoPreviewPresented: Bool
 
     private var stateAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .smooth(duration: 0.22)
-        } else {
-            return .easeInOut(duration: 0.22)
-        }
+        AppAnimations.standard
     }
 
     var body: some View {
@@ -96,7 +92,7 @@ struct ArchiveView: View {
     }
 
     private func restore(_ task: TaskItem) {
-        withAnimation {
+        withAnimation(AppAnimations.standard) {
             if let index = store.archivedTasks.firstIndex(of: task) {
                 let restored = store.archivedTasks.remove(at: index)
                 store.tasks.append(restored)

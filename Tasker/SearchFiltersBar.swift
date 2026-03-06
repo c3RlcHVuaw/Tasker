@@ -14,6 +14,7 @@ func usedReactions(from tasks: [TaskItem]) -> [String] {
 struct SearchFiltersMenuButton: View {
     @Binding var filterWithPhoto: Bool
     @Binding var filterArchive: Bool
+    @Environment(\.appAccentColor) private var appAccentColor
 
     var body: some View {
         Menu {
@@ -30,11 +31,11 @@ struct SearchFiltersMenuButton: View {
                       : "line.3.horizontal.decrease.circle")
                     .font(.system(size: 20, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle((filterWithPhoto || filterArchive) ? Color.accentColor : Color.primary)
+                    .foregroundStyle((filterWithPhoto || filterArchive) ? appAccentColor : Color.primary)
 
                 if filterWithPhoto || filterArchive {
                     Circle()
-                        .fill(Color.accentColor)
+                        .fill(appAccentColor)
                         .frame(width: 6, height: 6)
                         .offset(x: 6, y: -4)
                 }
@@ -50,6 +51,7 @@ struct SearchFiltersMenuButton: View {
 struct SearchReactionChipsBar: View {
     let reactions: [String]
     @Binding var selectedReaction: String?
+    var onDirectionResolved: ((Bool) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Namespace private var reactionHighlightNS
@@ -73,7 +75,7 @@ struct SearchReactionChipsBar: View {
                                 isSelected: item == "Все" ? selectedReaction == nil : selectedReaction == item,
                                 stretch: true
                             ) {
-                                selectedReaction = item == "Все" ? nil : item
+                                updateSelection(to: item)
                             }
                         }
                     }
@@ -88,7 +90,7 @@ struct SearchReactionChipsBar: View {
                                     isSelected: item == "Все" ? selectedReaction == nil : selectedReaction == item,
                                     stretch: false
                                 ) {
-                                    selectedReaction = item == "Все" ? nil : item
+                                    updateSelection(to: item)
                                 }
                             }
                         }
@@ -104,15 +106,15 @@ struct SearchReactionChipsBar: View {
                         .fill(Color.clear)
                         .glassEffect(
                             .regular
-                                .tint(colorScheme == .dark ? .black.opacity(0.20) : .black.opacity(0.08)),
+                                .tint(colorScheme == .dark ? .white.opacity(0.22) : .white.opacity(0.46)),
                             in: .capsule
                         )
                 } else {
                     Capsule()
-                        .fill(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.10))
+                        .fill(.ultraThinMaterial)
                         .overlay(
                             Capsule()
-                                .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.12))
+                                .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.20 : 0.34))
                         )
                 }
             }
@@ -127,14 +129,8 @@ struct SearchReactionChipsBar: View {
         action: @escaping () -> Void
     ) -> some View {
         Button {
-            if #available(iOS 26.0, *) {
-                withAnimation(.snappy(duration: 0.35, extraBounce: 0.10)) {
-                    action()
-                }
-            } else {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    action()
-                }
+            withAnimation(AppAnimations.quick) {
+                action()
             }
         } label: {
             Text(title)
@@ -153,18 +149,26 @@ struct SearchReactionChipsBar: View {
                     Capsule()
                         .glassEffect(
                             .regular
-                                .tint(colorScheme == .dark ? .white.opacity(0.20) : .white.opacity(0.44))
+                                .tint(colorScheme == .dark ? .white.opacity(0.28) : .white.opacity(0.62))
                                 .interactive(),
                             in: .capsule
                         )
                         .matchedGeometryEffect(id: "reactionHighlight", in: reactionHighlightNS)
                 } else {
                     Capsule()
-                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.22 : 0.10))
+                        .fill(Color.white.opacity(colorScheme == .dark ? 0.20 : 0.46))
                         .background(.ultraThinMaterial, in: Capsule())
                         .matchedGeometryEffect(id: "reactionHighlight", in: reactionHighlightNS)
                 }
             }
         }
+    }
+
+    private func updateSelection(to item: String) {
+        let currentItem = selectedReaction ?? "Все"
+        let currentIndex = allItems.firstIndex(of: currentItem) ?? 0
+        let newIndex = allItems.firstIndex(of: item) ?? 0
+        onDirectionResolved?(newIndex >= currentIndex)
+        selectedReaction = item == "Все" ? nil : item
     }
 }

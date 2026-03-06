@@ -22,17 +22,29 @@ struct SearchResults: View {
                     description: searchText.isEmpty ? Text("Введите запрос для поиска") : Text("Попробуйте другой запрос")
                 )
             } else {
-                List {
-                    ForEach(filteredTasks) { task in
-                        TaskBubbleView(task: task, store: store)
+                GeometryReader { proxy in
+                    List {
+                        ForEach(filteredTasks) { task in
+                            TaskBubbleView(
+                                task: task,
+                                containerWidth: proxy.size.width,
+                                coordinateSpaceName: "searchResultsSpace",
+                                store: store,
+                                selectedPhotoForPreview: .constant(nil),
+                                isPhotoPreviewPresented: .constant(false),
+                                isSelectionMode: .constant(false),
+                                selectedTasks: .constant(Set<UUID>())
+                            )
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
+                        }
                     }
+                    .coordinateSpace(name: "searchResultsSpace")
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.white)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(Color.white)
             }
         }
         .navigationTitle("Поиск")

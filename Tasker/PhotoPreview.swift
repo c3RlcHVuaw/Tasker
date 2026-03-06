@@ -29,14 +29,14 @@ struct PhotoPreview: View {
                                         offset = g.translation
                                     }
                                     .onEnded { _ in
-                                        withAnimation(.spring()) {
+                                        withAnimation(AppAnimations.standard) {
                                             if scale <= 1 { scale = 1; offset = .zero }
                                         }
                                     }
                                 )
                         )
                         .onTapGesture(count: 2) {
-                            withAnimation(.spring()) {
+                            withAnimation(AppAnimations.quick) {
                                 scale = scale > 1 ? 1 : 2
                             }
                         }

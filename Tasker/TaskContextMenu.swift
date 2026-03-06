@@ -7,19 +7,22 @@ struct TaskContextMenu: View {
     @Binding var isSelectionMode: Bool
 
     private var mutationAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .snappy(duration: 0.24, extraBounce: 0.07)
-        } else {
-            return .spring(response: 0.30, dampingFraction: 0.84)
-        }
+        AppAnimations.standard
     }
     
     @ViewBuilder
     var body: some View {
         Menu("Реакция") {
             ForEach(reactionEmojis, id: \.self) { emoji in
-                Button(emoji) {
+                Button {
                     addReaction(emoji)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(reactionColor(for: emoji))
+                        Text(emoji)
+                    }
                 }
             }
         }
@@ -40,6 +43,23 @@ struct TaskContextMenu: View {
             togglePin()
         } label: {
             Label(task.isPinned ? "Открепить" : "Закрепить", systemImage: "pin")
+        }
+
+        Menu {
+            ForEach(TaskRecurrence.allCases, id: \.rawValue) { item in
+                Button {
+                    setRecurrence(item)
+                } label: {
+                    HStack {
+                        Text(item.title)
+                        if task.recurrence == item {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label("Повтор: \(task.recurrence.title)", systemImage: "repeat")
         }
 
         Button(role: .destructive) {
@@ -85,6 +105,31 @@ struct TaskContextMenu: View {
             }
         }
     }
+
+    private func setRecurrence(_ recurrence: TaskRecurrence) {
+        if let index = store.tasks.firstIndex(where: { $0.id == task.id }) {
+            withAnimation(mutationAnimation) {
+                store.tasks[index].recurrence = recurrence
+            }
+        }
+    }
+
+    private func reactionColor(for emoji: String) -> Color {
+        switch emoji {
+        case "👍": return .blue
+        case "❤️": return .red
+        case "🔥": return .orange
+        case "👏": return .green
+        case "🤔": return .yellow
+        case "✅": return .mint
+        case "🚀": return .indigo
+        case "👀": return .teal
+        case "😊": return .pink
+        case "💡": return .purple
+        default: return .secondary
+        }
+    }
+
 }
 
 #Preview {

@@ -11,6 +11,7 @@ struct SearchResultsView: View {
     @Binding var filterWithPhoto: Bool
     @Binding var filterArchive: Bool
     @Binding var selectedReaction: String?
+    @Binding var isReactionSlideForward: Bool
     @Binding var selectedPhotoForPreview: Data?
     @State private var contextMenuTask: TaskItem?
     @Binding var isContextMenuPresented: Bool
@@ -32,19 +33,11 @@ struct SearchResultsView: View {
     }
 
     private var stateAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .smooth(duration: 0.22)
-        } else {
-            return .easeInOut(duration: 0.22)
-        }
+        AppAnimations.standard
     }
 
     private var mutationAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .snappy(duration: 0.26, extraBounce: 0.08)
-        } else {
-            return .spring(response: 0.30, dampingFraction: 0.84)
-        }
+        AppAnimations.standard
     }
 
     var filteredTasks: [TaskItem] {
@@ -65,6 +58,24 @@ struct SearchResultsView: View {
         }
 
         return tasks
+    }
+
+    private var reactionSelectionID: String {
+        selectedReaction ?? "__all__"
+    }
+
+    private var reactionSlideTransition: AnyTransition {
+        if isReactionSlideForward {
+            return .asymmetric(
+                insertion: .move(edge: .trailing).combined(with: .opacity),
+                removal: .move(edge: .leading).combined(with: .opacity)
+            )
+        } else {
+            return .asymmetric(
+                insertion: .move(edge: .leading).combined(with: .opacity),
+                removal: .move(edge: .trailing).combined(with: .opacity)
+            )
+        }
     }
 
     var body: some View {
@@ -106,6 +117,8 @@ struct SearchResultsView: View {
                                         .listRowBackground(Color.clear)
                                         .listRowSeparator(.hidden)
                                     }
+                                    .id(reactionSelectionID)
+                                    .transition(reactionSlideTransition)
                                     .listStyle(.plain)
                                     .scrollContentBackground(.hidden)
                                 }
@@ -263,6 +276,10 @@ struct SearchResultsView: View {
                         togglePin(for: task.id)
                         closeMessageContextMenu()
                     },
+                    onRecurrenceChange: { recurrence in
+                        setRecurrence(recurrence, for: task.id)
+                        closeMessageContextMenu()
+                    },
                     onArchive: {
                         if let current = store.tasks.first(where: { $0.id == task.id }) {
                             withAnimation(mutationAnimation) {
@@ -297,14 +314,14 @@ struct SearchResultsView: View {
         } else {
             contextMenuTask = task
         }
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(AppAnimations.fade) {
             isContextMenuPresented = true
         }
         let openID = contextMenuPresentationID
         contextMenuAnimationTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 40_000_000)
             guard !Task.isCancelled, openID == contextMenuPresentationID else { return }
-            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.86, blendDuration: 0.14)) {
+            withAnimation(AppAnimations.menuPresent) {
                 isContextMenuContentVisible = true
             }
         }
@@ -314,13 +331,13 @@ struct SearchResultsView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         contextMenuAnimationTask?.cancel()
         let closingID = contextMenuPresentationID
-        withAnimation(.interactiveSpring(response: 0.22, dampingFraction: 0.98, blendDuration: 0.08)) {
+        withAnimation(AppAnimations.menuDismiss) {
             isContextMenuContentVisible = false
         }
         contextMenuAnimationTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 70_000_000)
             guard !Task.isCancelled, closingID == contextMenuPresentationID else { return }
-            withAnimation(.easeIn(duration: 0.14)) {
+            withAnimation(AppAnimations.fade) {
                 isContextMenuPresented = false
             }
 
@@ -347,6 +364,13 @@ struct SearchResultsView: View {
             store.tasks[index].isPinned.toggle()
         }
     }
+
+    private func setRecurrence(_ recurrence: TaskRecurrence, for taskID: UUID) {
+        guard let index = store.tasks.firstIndex(where: { $0.id == taskID }) else { return }
+        withAnimation(mutationAnimation) {
+            store.tasks[index].recurrence = recurrence
+        }
+    }
 }
 
 struct SearchScreen: View {
@@ -360,6 +384,7 @@ struct SearchScreen: View {
     @State private var filterArchive: Bool = false
 
     @State private var selectedReaction: String? = nil
+    @State private var isReactionSlideForward = true
     @State private var selectedPhotoForPreview: Data? = nil
     @State private var selectedPhotoItem: SearchPhotoItem?
     @State private var didConfigureSearchAppearance = false
@@ -404,6 +429,7 @@ struct SearchScreen: View {
                 filterWithPhoto: $filterWithPhoto,
                 filterArchive: $filterArchive,
                 selectedReaction: $selectedReaction,
+                isReactionSlideForward: $isReactionSlideForward,
                 selectedPhotoForPreview: $selectedPhotoForPreview,
                 isContextMenuPresented: $isContextMenuPresented
             )
@@ -439,7 +465,10 @@ struct SearchScreen: View {
             if !availableReactions.isEmpty && !isContextMenuPresented {
                 SearchReactionChipsBar(
                     reactions: availableReactions,
-                    selectedReaction: $selectedReaction
+                    selectedReaction: $selectedReaction,
+                    onDirectionResolved: { isForward in
+                        isReactionSlideForward = isForward
+                    }
                 )
                 .padding(.horizontal, 12)
                 .padding(.bottom, reactionChipsBottomPadding)
@@ -470,7 +499,7 @@ struct SearchScreen: View {
             }
         }
         .onReceive(Publishers.keyboardHeightPublisher) { height in
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(AppAnimations.fade) {
                 keyboardHeight = height
             }
         }

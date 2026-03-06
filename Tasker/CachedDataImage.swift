@@ -8,6 +8,7 @@ private final class DataImageCache {
 
     private init() {
         cache.countLimit = 300
+        cache.totalCostLimit = 150 * 1024 * 1024
     }
 
     func image(for key: NSString) -> UIImage? {
@@ -15,7 +16,8 @@ private final class DataImageCache {
     }
 
     func insert(_ image: UIImage, for key: NSString) {
-        cache.setObject(image, forKey: key)
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        cache.setObject(image, forKey: key, cost: max(cost, 1))
     }
 }
 
@@ -47,7 +49,7 @@ struct CachedDataImage<Content: View, Placeholder: View>: View {
 
             let source = data
             let decoded = await Task.detached(priority: .utility) {
-                decodeImage(data: source, pixelSize: pixelSize)
+                Self.decodeImage(data: source, pixelSize: pixelSize)
             }.value
 
             guard let decoded else { return }
@@ -66,7 +68,7 @@ struct CachedDataImage<Content: View, Placeholder: View>: View {
         "\(data.hashValue)_\(pixelSize ?? 0)" as NSString
     }
 
-    private func decodeImage(data: Data, pixelSize: Int?) -> UIImage? {
+    nonisolated private static func decodeImage(data: Data, pixelSize: Int?) -> UIImage? {
         guard let pixelSize else {
             return UIImage(data: data)
         }

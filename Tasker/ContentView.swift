@@ -79,7 +79,7 @@ struct ContentView: View {
                 .tabItem { Label("Поиск", systemImage: "magnifyingglass") }
                 .tag(AppTab.search)
         }
-        .animation(.snappy(duration: 0.26, extraBounce: 0.03), value: selectedTab)
+        .animation(AppAnimations.tabSwitch, value: selectedTab)
     }
 
     // MARK: - Tab contents
@@ -141,4 +141,5 @@ fileprivate struct PhotoItem: Identifiable {
 
 #Preview {
     ContentView()
+        .environmentObject(PremiumManager())
 }

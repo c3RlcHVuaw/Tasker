@@ -14,10 +14,9 @@ struct TaskBubbleFramePreferenceKey: PreferenceKey {
 struct HomeView: View {
     @ObservedObject var store: TaskStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appAccentColor) private var appAccentColor
     @AppStorage("settings_enable_haptics") private var enableHaptics = true
     @AppStorage("settings_enable_rich_animations") private var enableRichAnimations = true
-    @State private var newTaskText = ""
-    @State private var newPhotos: [Data] = []
     @State private var keyboardHeight: CGFloat = 0
 
     @State private var isSelectionMode = false
@@ -27,6 +26,7 @@ struct HomeView: View {
     @State private var scrollToTaskId: UUID?
     @State private var didPerformInitialBottomScroll = false
     @State private var selectedReaction: String?
+    @State private var isReactionSlideForward = true
     @State private var contextMenuTask: TaskItem?
     @State private var isContextMenuPresented = false
     @State private var isContextMenuContentVisible = false
@@ -34,6 +34,9 @@ struct HomeView: View {
     @State private var contextMenuAnimationTask: Task<Void, Never>?
     @State private var bubbleFrames: [UUID: CGRect] = [:]
     @State private var isAppSettingsPresented = false
+    @AppStorage(AppPreferenceKeys.premiumUnlocked) private var isPremiumUnlocked = false
+    @AppStorage(AppPreferenceKeys.chatBackgroundStyle) private var chatBackgroundStyleRawValue = ChatBackgroundStyle.system.rawValue
+    @AppStorage(AppPreferenceKeys.chatBackgroundCustomImagePath) private var chatBackgroundCustomImagePath = ""
 
     @Binding var selectedPhotoForPreview: Data?
     @Binding var isPhotoPreviewPresented: Bool
@@ -42,15 +45,16 @@ struct HomeView: View {
         guard enableRichAnimations else {
             return .linear(duration: 0.01)
         }
-        if #available(iOS 26.0, *) {
-            return .snappy(duration: 0.26, extraBounce: 0.08)
-        } else {
-            return .spring(response: 0.30, dampingFraction: 0.84)
-        }
+        return AppAnimations.standard
     }
 
     private var stateTransition: AnyTransition {
         .opacity.combined(with: .move(edge: .bottom))
+    }
+
+    private var effectiveChatBackgroundStyle: ChatBackgroundStyle {
+        guard isPremiumUnlocked else { return .system }
+        return ChatBackgroundStyle(rawValue: chatBackgroundStyleRawValue) ?? .system
     }
     
     var pinnedTasks: [TaskItem] {
@@ -64,6 +68,24 @@ struct HomeView: View {
     var filteredTasks: [TaskItem] {
         guard let selectedReaction else { return store.tasks }
         return store.tasks.filter { $0.reactions.contains(selectedReaction) }
+    }
+
+    private var reactionSelectionID: String {
+        selectedReaction ?? "__all__"
+    }
+
+    private var reactionSlideTransition: AnyTransition {
+        if isReactionSlideForward {
+            return .asymmetric(
+                insertion: .move(edge: .trailing).combined(with: .opacity),
+                removal: .move(edge: .leading).combined(with: .opacity)
+            )
+        } else {
+            return .asymmetric(
+                insertion: .move(edge: .leading).combined(with: .opacity),
+                removal: .move(edge: .trailing).combined(with: .opacity)
+            )
+        }
     }
 
     private enum ListContentState: Equatable {
@@ -82,6 +104,12 @@ struct HomeView: View {
         NavigationStack {
             GeometryReader { proxy in
                 ZStack(alignment: .bottom) {
+                    ChatBackgroundView(
+                        style: effectiveChatBackgroundStyle,
+                        customImagePath: chatBackgroundCustomImagePath
+                    )
+                    .allowsHitTesting(false)
+
                     // Список задач или пустое состояние
                     VStack(spacing: 0) {
                         // Pinned tasks header
@@ -101,7 +129,10 @@ struct HomeView: View {
                         if !availableReactions.isEmpty {
                             SearchReactionChipsBar(
                                 reactions: availableReactions,
-                                selectedReaction: $selectedReaction
+                                selectedReaction: $selectedReaction,
+                                onDirectionResolved: { isForward in
+                                    isReactionSlideForward = isForward
+                                }
                             )
                             .padding(.horizontal, 16)
                             .padding(.bottom, 6)
@@ -138,6 +169,8 @@ struct HomeView: View {
                                             selectedTasks: $selectedTasks,
                                             onContextMenuRequested: openMessageContextMenu
                                         )
+                                        .id(reactionSelectionID)
+                                        .transition(reactionSlideTransition)
                                         .contentShape(Rectangle())
                                         .simultaneousGesture(
                                             DragGesture(minimumDistance: 20, coordinateSpace: .local)
@@ -151,7 +184,7 @@ struct HomeView: View {
                                         }
                                         .onChange(of: scrollToTaskId) { _, taskId in
                                             if let taskId {
-                                                withAnimation(.easeInOut(duration: 0.3)) {
+                                                withAnimation(AppAnimations.standard) {
                                                     scrollProxy.scrollTo(taskId, anchor: .top)
                                                 }
                                             }
@@ -177,7 +210,7 @@ struct HomeView: View {
                     .blur(radius: isContextMenuPresented ? 10 : 0)
                     .allowsHitTesting(!isContextMenuPresented)
                     .onReceive(Publishers.keyboardHeightPublisher) { height in
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        withAnimation(AppAnimations.fade) {
                             keyboardHeight = height
                         }
                     }
@@ -195,14 +228,12 @@ struct HomeView: View {
                                 completeSelectedTasks()
                             }
                             .buttonStyle(.borderedProminent)
-                            .tint(.accentColor)
+                            .tint(appAccentColor)
                             .padding(.horizontal, 16)
                             .padding(.bottom, 16)
                             .transition(stateTransition)
                         } else {
                             GlassInputField(
-                                text: $newTaskText,
-                                photos: $newPhotos,
                                 onSubmit: addTask
                             )
                             .offset(y: keyboardHeight > 0 ? -(keyboardHeight - proxy.safeAreaInsets.bottom) : 0)
@@ -450,6 +481,10 @@ struct HomeView: View {
                         togglePin(for: task.id)
                         closeMessageContextMenu()
                     },
+                    onRecurrenceChange: { recurrence in
+                        setRecurrence(recurrence, for: task.id)
+                        closeMessageContextMenu()
+                    },
                     onArchive: {
                         if let current = store.tasks.first(where: { $0.id == task.id }) {
                             withAnimation(mutationAnimation) {
@@ -489,14 +524,14 @@ struct HomeView: View {
         } else {
             contextMenuTask = task
         }
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(AppAnimations.fade) {
             isContextMenuPresented = true
         }
         let openID = contextMenuPresentationID
         contextMenuAnimationTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 40_000_000)
             guard !Task.isCancelled, openID == contextMenuPresentationID else { return }
-            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.86, blendDuration: 0.14)) {
+            withAnimation(AppAnimations.menuPresent) {
                 isContextMenuContentVisible = true
             }
         }
@@ -506,13 +541,13 @@ struct HomeView: View {
         impact(.light)
         contextMenuAnimationTask?.cancel()
         let closingID = contextMenuPresentationID
-        withAnimation(.interactiveSpring(response: 0.22, dampingFraction: 0.98, blendDuration: 0.08)) {
+        withAnimation(AppAnimations.menuDismiss) {
             isContextMenuContentVisible = false
         }
         contextMenuAnimationTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 70_000_000)
             guard !Task.isCancelled, closingID == contextMenuPresentationID else { return }
-            withAnimation(.easeIn(duration: 0.14)) {
+            withAnimation(AppAnimations.fade) {
                 isContextMenuPresented = false
             }
 
@@ -540,24 +575,36 @@ struct HomeView: View {
         }
     }
 
-    private func addTask() {
-        guard !newTaskText.trimmingCharacters(in: .whitespaces).isEmpty || !newPhotos.isEmpty else { return }
-        let addedPhotosCount = newPhotos.count
+    private func setRecurrence(_ recurrence: TaskRecurrence, for taskID: UUID) {
+        guard let index = store.tasks.firstIndex(where: { $0.id == taskID }) else { return }
+        withAnimation(mutationAnimation) {
+            store.tasks[index].recurrence = recurrence
+        }
+    }
+
+    private func addTask(text: String, photos: [Data], recurrence: TaskRecurrence) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !photos.isEmpty else { return }
+        let addedPhotosCount = photos.count
         let assignedReactions = selectedReaction.map { [$0] } ?? []
         PerformanceTelemetry.measure("addTask") {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                store.tasks.append(TaskItem(text: newTaskText, photos: newPhotos, reactions: assignedReactions))
+            withAnimation(AppAnimations.standard) {
+                store.tasks.append(
+                    TaskItem(
+                        text: text,
+                        photos: photos,
+                        reactions: assignedReactions,
+                        recurrence: recurrence
+                    )
+                )
             }
         }
         PerformanceTelemetry.countEvent("addTask.photosCount", count: addedPhotosCount)
-        newTaskText = ""
-        newPhotos = []
     }
 
     private func completeSelectedTasks() {
         let selectedCount = selectedTasks.count
         PerformanceTelemetry.measure("completeSelectedTasks") {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            withAnimation(AppAnimations.standard) {
                 store.archiveTasks(ids: selectedTasks)
                 selectedTasks.removeAll()
                 isSelectionMode = false
@@ -569,7 +616,7 @@ struct HomeView: View {
     private func archiveAllTasks() {
         let totalCount = store.tasks.count
         PerformanceTelemetry.measure("archiveAllTasks") {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            withAnimation(AppAnimations.standard) {
                 store.archiveAllTasks()
                 selectedTasks.removeAll()
             }
@@ -596,14 +643,9 @@ struct HomeView: View {
 
         guard nextIndex != currentIndex else { return }
 
-        if #available(iOS 26.0, *) {
-            withAnimation(.snappy(duration: 0.28, extraBounce: 0.08)) {
-                selectedReaction = nextIndex == 0 ? nil : allItems[nextIndex]
-            }
-        } else {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.88)) {
-                selectedReaction = nextIndex == 0 ? nil : allItems[nextIndex]
-            }
+        withAnimation(AppAnimations.quick) {
+            isReactionSlideForward = horizontal < 0
+            selectedReaction = nextIndex == 0 ? nil : allItems[nextIndex]
         }
     }
 
@@ -615,50 +657,363 @@ struct HomeView: View {
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
         guard !didPerformInitialBottomScroll, let lastID = filteredTasks.last?.id else { return }
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.25)) {
+            withAnimation(AppAnimations.fade) {
                 scrollProxy.scrollTo(lastID, anchor: .bottom)
             }
             didPerformInitialBottomScroll = true
         }
     }
+
 }
 
 private struct AppSettingsSheet: View {
     @ObservedObject var store: TaskStore
+    @EnvironmentObject private var premiumManager: PremiumManager
     @Environment(\.dismiss) private var dismiss
     @AppStorage("settings_enable_haptics") private var enableHaptics = true
     @AppStorage("settings_enable_rich_animations") private var enableRichAnimations = true
     @AppStorage("settings_compact_photos_layout") private var compactPhotosLayout = false
+    @AppStorage(AppPreferenceKeys.themeMode) private var themeModeRawValue = AppThemeMode.system.rawValue
+    @AppStorage(AppPreferenceKeys.accentColor) private var accentColorRawValue = AppAccentColor.blue.rawValue
+    @AppStorage(AppPreferenceKeys.enableRecurrenceNotifications) private var enableRecurrenceNotifications = false
+    @AppStorage(AppPreferenceKeys.recurrenceNotificationHour) private var recurrenceNotificationHour = 9
+    @AppStorage(AppPreferenceKeys.recurrenceNotificationMinute) private var recurrenceNotificationMinute = 0
+    @AppStorage(AppPreferenceKeys.chatBackgroundStyle) private var chatBackgroundStyleRawValue = ChatBackgroundStyle.system.rawValue
+    @AppStorage(AppPreferenceKeys.chatBackgroundCustomImagePath) private var chatBackgroundCustomImagePath = ""
     @State private var showClearArchiveAlert = false
+    @State private var showTestNotificationAlert = false
+    @State private var testNotificationAlertMessage = ""
+    @State private var selectedBackgroundImageItem: PhotosPickerItem?
+    @State private var showPremiumErrorAlert = false
+    @State private var showBackgroundImportErrorAlert = false
+    @State private var backgroundImportErrorMessage = ""
+
+    private var selectedAccentColor: AppAccentColor {
+        AppAccentColor(rawValue: accentColorRawValue) ?? .blue
+    }
+
+    private var selectedChatBackgroundStyle: ChatBackgroundStyle {
+        ChatBackgroundStyle(rawValue: chatBackgroundStyleRawValue) ?? .system
+    }
+
+    private var premiumFeatures: [(icon: String, title: String, subtitle: String)] {
+        [
+            ("sparkles.rectangle.stack.fill", "Анимированные фоны чата", "Яркие preset-фоны с живым переливом."),
+            ("photo.on.rectangle.angled", "Свой фон из галереи", "Поставь любое фото как фон чата."),
+            ("paintpalette.fill", "Премиум-визуал", "Единый стиль для тем и будущих улучшений.")
+        ]
+    }
+
+    private var recurrenceTimeBinding: Binding<Date> {
+        Binding {
+            let calendar = Calendar.current
+            return calendar.date(
+                bySettingHour: recurrenceNotificationHour,
+                minute: recurrenceNotificationMinute,
+                second: 0,
+                of: Date()
+            ) ?? Date()
+        } set: { newValue in
+            let components = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+            recurrenceNotificationHour = components.hour ?? 9
+            recurrenceNotificationMinute = components.minute ?? 0
+        }
+    }
+
+    @ViewBuilder
+    private var premiumSection: some View {
+        Section("Premium") {
+            premiumHeroCard
+
+            ForEach(Array(premiumFeatures.enumerated()), id: \.offset) { _, feature in
+                HStack(spacing: 10) {
+                    Image(systemName: feature.icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(feature.title)
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        Text(feature.subtitle)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Image(systemName: premiumManager.isPremiumUnlocked ? "checkmark.seal.fill" : "lock.fill")
+                        .foregroundStyle(premiumManager.isPremiumUnlocked ? .green : .secondary)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .padding(.vertical, 2)
+            }
+
+            if !premiumManager.isPremiumUnlocked {
+                Button {
+                    Task {
+                        await premiumManager.purchasePremium()
+                    }
+                } label: {
+                    HStack {
+                        if premiumManager.isProcessing {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Купить Premium")
+                            .fontWeight(.semibold)
+                    }
+                }
+                .disabled(premiumManager.isProcessing)
+
+                Button("Восстановить покупки") {
+                    Task {
+                        await premiumManager.restorePurchases()
+                    }
+                }
+                .disabled(premiumManager.isProcessing)
+            } else {
+                Label("Спасибо за поддержку проекта", systemImage: "heart.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var interfaceSection: some View {
+        Section("Интерфейс") {
+            LabeledContent("Тема") {
+                HStack(spacing: 8) {
+                    ForEach(AppThemeMode.allCases, id: \.rawValue) { mode in
+                        Button {
+                            themeModeRawValue = mode.rawValue
+                            applyThemeMode(mode)
+                        } label: {
+                            Image(systemName: mode.symbolName)
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 30, height: 28)
+                                .background(
+                                    Capsule()
+                                        .fill((AppThemeMode(rawValue: themeModeRawValue) ?? .system) == mode
+                                              ? Color.secondary.opacity(0.24)
+                                              : Color.clear)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Menu {
+                ForEach(AppAccentColor.allCases, id: \.rawValue) { accent in
+                    Button {
+                        accentColorRawValue = accent.rawValue
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(accent.title)
+                            if selectedAccentColor == accent {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Text("Цвет задач")
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Image(systemName: "circle.fill")
+                            .foregroundStyle(selectedAccentColor.color)
+                            .font(.system(size: 8, weight: .bold))
+                        Text(selectedAccentColor.title)
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .tint(.primary)
+
+            Toggle("Тактильный отклик", isOn: $enableHaptics)
+            Toggle("Плавные анимации", isOn: $enableRichAnimations)
+            Toggle("Компактная раскладка фото", isOn: $compactPhotosLayout)
+        }
+    }
+
+    @ViewBuilder
+    private var chatBackgroundSection: some View {
+        Section("Фон чата") {
+            if premiumManager.isPremiumUnlocked {
+                Menu {
+                    ForEach(ChatBackgroundStyle.allCases.filter { $0 != .custom }, id: \.rawValue) { style in
+                        Button {
+                            chatBackgroundStyleRawValue = style.rawValue
+                        } label: {
+                            HStack {
+                                Text(style.title)
+                                if selectedChatBackgroundStyle == style {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    LabeledContent("Пресет", value: selectedChatBackgroundStyle.title)
+                }
+                .tint(.primary)
+
+                PhotosPicker(
+                    selection: $selectedBackgroundImageItem,
+                    matching: .images
+                ) {
+                    Label("Выбрать своё изображение", systemImage: "photo.on.rectangle")
+                }
+                .tint(.primary)
+
+                if !chatBackgroundCustomImagePath.isEmpty {
+                    Button("Сбросить свой фон", role: .destructive) {
+                        ChatBackgroundStorage.removeImage(at: chatBackgroundCustomImagePath)
+                        chatBackgroundCustomImagePath = ""
+                        if selectedChatBackgroundStyle == .custom {
+                            chatBackgroundStyleRawValue = ChatBackgroundStyle.goldenPeach.rawValue
+                        }
+                    }
+                }
+            } else {
+                Label("Доступно в Premium", systemImage: "lock.fill")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var notificationsSection: some View {
+        Section("Уведомления") {
+            Toggle("Уведомлять о повторах", isOn: $enableRecurrenceNotifications)
+
+            DatePicker(
+                "Время уведомлений",
+                selection: recurrenceTimeBinding,
+                displayedComponents: .hourAndMinute
+            )
+            .disabled(!enableRecurrenceNotifications)
+
+            Button("Тестовое уведомление") {
+                Task {
+                    let ok = await RecurringTaskNotifications.sendTestNotification()
+                    await MainActor.run {
+                        testNotificationAlertMessage = ok
+                            ? "Отправлено. Уведомление придет через пару секунд."
+                            : "Нет доступа к уведомлениям. Разреши их в Настройках iOS."
+                        showTestNotificationAlert = true
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dataSection: some View {
+        Section("Данные") {
+            LabeledContent("Активные задачи", value: "\(store.tasks.count)")
+            LabeledContent("Архив", value: "\(store.archivedTasks.count)")
+
+            Button("Сохранить сейчас") {
+                store.flushPendingSaves()
+            }
+
+            Button("Очистить архив", role: .destructive) {
+                showClearArchiveAlert = true
+            }
+            .disabled(store.archivedTasks.isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private var accountSection: some View {
+        Section("Аккаунт") {
+            Text("Вход через Apple ID и iCloud-синхронизация временно отключены.")
+                .foregroundStyle(.secondary)
+                .font(.footnote)
+        }
+    }
+
+    @ViewBuilder
+    private var developerSection: some View {
+        #if DEBUG
+        Section("Для разработчиков") {
+            LabeledContent("Premium статус", value: premiumManager.isPremiumUnlocked ? "Активен" : "Не активен")
+
+            Button("Активировать Premium") {
+                premiumManager.unlockForDebug()
+            }
+            .disabled(premiumManager.isPremiumUnlocked)
+
+            Button("Убрать Premium", role: .destructive) {
+                premiumManager.removePremiumForDebug()
+                chatBackgroundStyleRawValue = ChatBackgroundStyle.system.rawValue
+            }
+            .disabled(!premiumManager.isPremiumUnlocked)
+        }
+        #endif
+    }
+
+    private var premiumHeroCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: premiumManager.isPremiumUnlocked ? "crown.fill" : "crown")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(premiumManager.isPremiumUnlocked ? .yellow : .white.opacity(0.9))
+                    .frame(width: 34, height: 34)
+                    .background(
+                        Circle()
+                            .fill(premiumManager.isPremiumUnlocked ? Color.yellow.opacity(0.20) : Color.white.opacity(0.12))
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(premiumManager.isPremiumUnlocked ? "Premium активен" : "Tasker Premium")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(premiumManager.isPremiumUnlocked
+                         ? "Все премиум-функции уже доступны."
+                         : "Прокачай визуал приложения и открой дополнительные возможности.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.88))
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            LinearGradient(
+                colors: premiumManager.isPremiumUnlocked
+                    ? [Color(red: 0.15, green: 0.16, blue: 0.20), Color(red: 0.31, green: 0.24, blue: 0.10)]
+                    : [Color(red: 0.14, green: 0.15, blue: 0.19), Color(red: 0.25, green: 0.15, blue: 0.28)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8)
+        )
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Интерфейс") {
-                    Toggle("Тактильный отклик", isOn: $enableHaptics)
-                    Toggle("Плавные анимации", isOn: $enableRichAnimations)
-                    Toggle("Компактная раскладка фото", isOn: $compactPhotosLayout)
-                }
-
-                Section("Данные") {
-                    LabeledContent("Активные задачи", value: "\(store.tasks.count)")
-                    LabeledContent("Архив", value: "\(store.archivedTasks.count)")
-
-                    Button("Сохранить сейчас") {
-                        store.flushPendingSaves()
-                    }
-
-                    Button("Очистить архив", role: .destructive) {
-                        showClearArchiveAlert = true
-                    }
-                    .disabled(store.archivedTasks.isEmpty)
-                }
-
-                Section("Аккаунт") {
-                    Text("Вход через Apple ID и iCloud-синхронизация временно отключены.")
-                        .foregroundStyle(.secondary)
-                        .font(.footnote)
-                }
+                premiumSection
+                interfaceSection
+                chatBackgroundSection
+                notificationsSection
+                dataSection
+                accountSection
+                developerSection
             }
             .navigationTitle("Настройки")
             .navigationBarTitleDisplayMode(.inline)
@@ -677,6 +1032,59 @@ private struct AppSettingsSheet: View {
             } message: {
                 Text("Это удалит все задачи из архива.")
             }
+            .alert("Тест уведомлений", isPresented: $showTestNotificationAlert) {
+                Button("Ок", role: .cancel) {}
+            } message: {
+                Text(testNotificationAlertMessage)
+            }
+            .alert("Premium", isPresented: $showPremiumErrorAlert) {
+                Button("Ок", role: .cancel) {
+                    premiumManager.lastErrorMessage = nil
+                }
+            } message: {
+                Text(premiumManager.lastErrorMessage ?? "Не удалось выполнить операцию.")
+            }
+            .alert("Фон чата", isPresented: $showBackgroundImportErrorAlert) {
+                Button("Ок", role: .cancel) {}
+            } message: {
+                Text(backgroundImportErrorMessage)
+            }
+        }
+        .onAppear {
+            applyThemeMode(AppThemeMode(rawValue: themeModeRawValue) ?? .system)
+            store.refreshRecurringNotifications()
+        }
+        .onChange(of: enableRecurrenceNotifications) { _, _ in
+            store.refreshRecurringNotifications()
+        }
+        .onChange(of: recurrenceNotificationHour) { _, _ in
+            store.refreshRecurringNotifications()
+        }
+        .onChange(of: recurrenceNotificationMinute) { _, _ in
+            store.refreshRecurringNotifications()
+        }
+        .onChange(of: selectedBackgroundImageItem) { _, item in
+            guard premiumManager.isPremiumUnlocked, let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let savedPath = ChatBackgroundStorage.saveImageData(data, replacing: chatBackgroundCustomImagePath) {
+                    await MainActor.run {
+                        chatBackgroundCustomImagePath = savedPath
+                        chatBackgroundStyleRawValue = ChatBackgroundStyle.custom.rawValue
+                    }
+                } else {
+                    await MainActor.run {
+                        backgroundImportErrorMessage = "Не удалось загрузить изображение. Попробуй выбрать другое фото."
+                        showBackgroundImportErrorAlert = true
+                    }
+                }
+                await MainActor.run {
+                    selectedBackgroundImageItem = nil
+                }
+            }
+        }
+        .onChange(of: premiumManager.lastErrorMessage) { _, newValue in
+            showPremiumErrorAlert = newValue != nil
         }
     }
 }
@@ -727,13 +1135,38 @@ struct TaskBubbleView: View {
     @Binding var isSelectionMode: Bool
     @Binding var selectedTasks: Set<UUID>
     var onContextMenuRequested: ((TaskItem) -> Void)? = nil
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppPreferenceKeys.accentColor) private var accentColorRawValue = AppAccentColor.blue.rawValue
+    @AppStorage(AppPreferenceKeys.premiumUnlocked) private var isPremiumUnlocked = false
+    @AppStorage(AppPreferenceKeys.chatBackgroundStyle) private var chatBackgroundStyleRawValue = ChatBackgroundStyle.system.rawValue
+
+    private var appAccentColor: Color {
+        (AppAccentColor(rawValue: accentColorRawValue) ?? .blue).color
+    }
+
+    private var effectiveChatBackgroundStyle: ChatBackgroundStyle {
+        guard isPremiumUnlocked else { return .system }
+        return ChatBackgroundStyle(rawValue: chatBackgroundStyleRawValue) ?? .system
+    }
+
+    private var bubbleFill: Color {
+        if effectiveChatBackgroundStyle == .system {
+            return selectedTasks.contains(task.id) ? appAccentColor.opacity(0.5) : appAccentColor
+        }
+        return selectedTasks.contains(task.id)
+            ? Color.black.opacity(colorScheme == .dark ? 0.82 : 0.86)
+            : Color.black.opacity(colorScheme == .dark ? 0.66 : 0.76)
+    }
+
+    private var bubbleSelectionStroke: Color {
+        if effectiveChatBackgroundStyle == .system {
+            return appAccentColor
+        }
+        return Color.white.opacity(colorScheme == .dark ? 0.26 : 0.20)
+    }
 
     private var selectionAnimation: Animation {
-        if #available(iOS 26.0, *) {
-            return .snappy(duration: 0.22, extraBounce: 0.06)
-        } else {
-            return .spring(response: 0.28, dampingFraction: 0.84)
-        }
+        AppAnimations.quick
     }
 
     private var maxBubbleWidth: CGFloat {
@@ -773,7 +1206,7 @@ struct TaskBubbleView: View {
                 } label: {
                     Image(systemName: selectedTasks.contains(task.id) ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 20))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(appAccentColor)
                 }
             }
 
@@ -788,6 +1221,23 @@ struct TaskBubbleView: View {
                 // Текст задачи
                 if !task.text.isEmpty {
                     HStack(spacing: 0) {
+                        if task.recurrence != .none {
+                            HStack(spacing: 4) {
+                                Image(systemName: "repeat")
+                                Text(task.recurrence.title)
+                            }
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.92))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 0.8)
+                            )
+                            .padding(.trailing, 6)
+                        }
+
                         if task.isPinned {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 12))
@@ -827,7 +1277,7 @@ struct TaskBubbleView: View {
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.86))
                     }
-                    Text(bubbleTimestampText(task.date))
+                    Text(bubbleMetaText(for: task))
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundColor(.white.opacity(0.72))
                 }
@@ -836,13 +1286,11 @@ struct TaskBubbleView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(selectedTasks.contains(task.id)
-                          ? Color.accentColor.opacity(0.5)
-                          : Color.accentColor)
+                    .fill(bubbleFill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color.accentColor, lineWidth: 2)
+                    .stroke(bubbleSelectionStroke, lineWidth: 2)
                     .opacity(selectedTasks.contains(task.id) ? 1 : 0)
             )
             .frame(maxWidth: maxBubbleWidth, alignment: .trailing)
@@ -863,13 +1311,13 @@ struct TaskBubbleView: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             if !isSelectionMode {
                 Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    withAnimation(AppAnimations.standard) {
                         store.archiveTask(task)
                     }
                 } label: {
                     Label("Архив", systemImage: "archivebox.fill")
                 }
-                .tint(.accentColor)
+                .tint(appAccentColor)
             }
         }
     }
@@ -896,6 +1344,26 @@ struct TaskBubbleView: View {
 
 struct ContextFocusedTaskBubble: View {
     let task: TaskItem
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppPreferenceKeys.accentColor) private var accentColorRawValue = AppAccentColor.blue.rawValue
+    @AppStorage(AppPreferenceKeys.premiumUnlocked) private var isPremiumUnlocked = false
+    @AppStorage(AppPreferenceKeys.chatBackgroundStyle) private var chatBackgroundStyleRawValue = ChatBackgroundStyle.system.rawValue
+
+    private var appAccentColor: Color {
+        (AppAccentColor(rawValue: accentColorRawValue) ?? .blue).color
+    }
+
+    private var effectiveChatBackgroundStyle: ChatBackgroundStyle {
+        guard isPremiumUnlocked else { return .system }
+        return ChatBackgroundStyle(rawValue: chatBackgroundStyleRawValue) ?? .system
+    }
+
+    private var bubbleFill: Color {
+        if effectiveChatBackgroundStyle == .system {
+            return appAccentColor
+        }
+        return Color.black.opacity(colorScheme == .dark ? 0.68 : 0.78)
+    }
 
     var body: some View {
         HStack {
@@ -907,6 +1375,22 @@ struct ContextFocusedTaskBubble: View {
 
                 if !task.text.isEmpty {
                     HStack(spacing: 0) {
+                        if task.recurrence != .none {
+                            HStack(spacing: 4) {
+                                Image(systemName: "repeat")
+                                Text(task.recurrence.title)
+                            }
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.92))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 0.8)
+                            )
+                            .padding(.trailing, 6)
+                        }
                         if task.isPinned {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 12))
@@ -931,13 +1415,13 @@ struct ContextFocusedTaskBubble: View {
                     }
                 }
 
-                Text(bubbleTimestampText(task.date))
+                Text(bubbleMetaText(for: task))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundColor(.white.opacity(0.72))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 18).fill(Color.accentColor))
+            .background(RoundedRectangle(cornerRadius: 18).fill(bubbleFill))
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -1058,6 +1542,7 @@ struct IMessageReactionsBar: View {
     let allowsScroll: Bool
     let onTap: (String) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appAccentColor) private var appAccentColor
 
     var body: some View {
         Group {
@@ -1095,7 +1580,7 @@ struct IMessageReactionsBar: View {
                                     Capsule(style: .continuous)
                                         .fill(
                                             selectedReactions.contains(emoji)
-                                                ? Color.accentColor.opacity(colorScheme == .dark ? 0.34 : 0.22)
+                                                ? appAccentColor.opacity(colorScheme == .dark ? 0.34 : 0.22)
                                                 : Color.clear
                                         )
                                 )
@@ -1107,7 +1592,7 @@ struct IMessageReactionsBar: View {
 }
 
 struct IMessageActionsCard: View {
-    static let baseHeight: CGFloat = 272.0
+    static let baseHeight: CGFloat = 316.0
     private let rowHeight: CGFloat = 44.0
     private let contentVerticalPadding: CGFloat = 6.0
     private let sectionDividerVerticalPadding: CGFloat = 6.0
@@ -1118,6 +1603,7 @@ struct IMessageActionsCard: View {
     let onReply: () -> Void
     let onCopy: () -> Void
     let onPinToggle: () -> Void
+    let onRecurrenceChange: (TaskRecurrence) -> Void
     let onArchive: () -> Void
     let onSelect: () -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -1156,6 +1642,7 @@ struct IMessageActionsCard: View {
             row("Ответить", systemImage: "arrowshape.turn.up.left", rowHeight: rowHeight, action: onReply, hasDivider: false)
             row("Скопировать", systemImage: "doc.on.doc", rowHeight: rowHeight, action: onCopy, hasDivider: false)
             row(task.isPinned ? "Открепить" : "Закрепить", systemImage: "pin", rowHeight: rowHeight, action: onPinToggle, hasDivider: false)
+            recurrenceMenuRow(rowHeight: rowHeight)
             row("Архивировать", systemImage: "archivebox", rowHeight: rowHeight, isDestructive: true, action: onArchive, hasDivider: false)
 
             Rectangle()
@@ -1167,6 +1654,57 @@ struct IMessageActionsCard: View {
             row("Выбрать", systemImage: "checkmark.circle", rowHeight: rowHeight, action: onSelect, hasDivider: false)
         }
         .padding(.vertical, contentVerticalPadding)
+    }
+
+    private func recurrenceMenuRow(rowHeight: CGFloat) -> some View {
+        Menu {
+            ForEach(TaskRecurrence.allCases, id: \.rawValue) { item in
+                Button {
+                    onRecurrenceChange(item)
+                } label: {
+                    HStack {
+                        Text(item.title)
+                        if task.recurrence == item {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: "repeat")
+                    .font(.system(size: 20, weight: .regular))
+                    .frame(width: 26)
+                Text("Повтор")
+                    .font(.system(size: 17, weight: .regular))
+                Spacer()
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(task.recurrence.shortTitle)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+
+                    if let nextText = recurrenceNextText {
+                        Text(nextText)
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.84)
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 20)
+            .frame(minHeight: rowHeight)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var recurrenceNextText: String? {
+        guard task.recurrence != .none else { return nil }
+        return MessageDateText.dayTimeFormatter.string(from: task.date)
     }
 
     private func row(
@@ -1209,6 +1747,13 @@ private func bubbleTimestampText(_ date: Date) -> String {
         return MessageDateText.timeFormatter.string(from: date)
     }
     return MessageDateText.dayTimeFormatter.string(from: date)
+}
+
+private func bubbleMetaText(for task: TaskItem) -> String {
+    if task.recurrence != .none, task.date > Date().addingTimeInterval(60) {
+        return "Следующее: \(MessageDateText.dayTimeFormatter.string(from: task.date))"
+    }
+    return bubbleTimestampText(task.date)
 }
 
 private func exactTimestampText(_ date: Date) -> String {
